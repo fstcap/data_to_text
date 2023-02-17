@@ -1,6 +1,7 @@
 import os
 import datetime
 
+import numpy as np
 import tensorflow as tf
 
 from keras.engine import data_adapter

@@ -1,8 +1,12 @@
 import os
+import re
+import datetime
 
 import numpy as np
 import pandas as pd
 import matplotlib.pyplot as plt
+
+from utils.save_data_tool import save_pkl
 
 
 def check_array(arr, index1, index2, index3, null_count):
@@ -15,7 +19,7 @@ def check_array(arr, index1, index2, index3, null_count):
 
 
 class DataAnalyze(object):
-    def __init__(self, path="./datasets/rl_tables_2023-02-15_14-23-16.pkl"):
+    def __init__(self, path="./original_source/rl_tables_2023-02-15_14-23-16.pkl"):
         self.datasets = np.load(path, allow_pickle=True)
         print(f"\033[0;32m{len(self.datasets)}\033[0m")
 
@@ -23,6 +27,7 @@ class DataAnalyze(object):
         records = []
         continue_count = 0
         null_count = [0]
+        error_introduction_count = 0
 
         count_start = 0
         count_end = 0
@@ -31,6 +36,7 @@ class DataAnalyze(object):
             count_start += 1
 
             info = dict()
+            info['order_id'] = dataset['order_id']
             info['student_name'] = dataset['table'][1][1][0]
             info['student_gender'] = dataset['table'][1][2][0]
 
@@ -74,9 +80,17 @@ class DataAnalyze(object):
             rl = list(filter(lambda x: x.strip() != '' and x is not None, dataset['rl']))
             info['recommendation_letter'] = rl
 
+            if re.search(r"When do students enter the University", info['introduction'], re.I) is not None:
+                error_introduction_count += 1
+
             records.append(info)
             count_end += 1
 
+        dataset_path = "./dataset"
+        if not os.path.exists(dataset_path):
+            os.makedirs(dataset_path)
+
+        save_pkl(os.path.join(dataset_path, f"records_{datetime.datetime.now().strftime('%Y-%m-%d_%H-%M-%S')}.pkl"), records)
         print()
         return records
 
