@@ -1,11 +1,15 @@
 import os
+import re
 import datetime
+import matplotlib.pyplot as plt
 
 import numpy as np
 import tensorflow as tf
 
 from keras.engine import data_adapter
 from transformers import GPT2Tokenizer, TFGPT2LMHeadModel
+
+from utils.save_data_tool import save_pkl
 
 PWD = os.getcwd()
 
@@ -24,6 +28,39 @@ if gpus:
     except RuntimeError as e:
         # Virtual devices must be set before GPUs have been initialized
         print(e)
+
+
+def train_val_split(samples, train_val_split_rate=0.1, seed=5):
+    """
+    json对象多个字段分割训练集和验证集
+    :param samples: json对象{'input_word_ids':[...], 'input_mask':[...], 'input_type_ids':[...], 'label':[...]}
+    :type samples: object
+    :param train_val_split_rate: 测试集占总样本的比率
+    :type train_val_split_rate: float
+    :param seed: 随机数生成器的种子
+    :type seed: int
+    :return: 返回训练集和验证集
+    :rtype: (
+                {'input_word_ids':[...], 'input_mask':[...], 'input_type_ids':[...], 'label':[...]},
+                {'input_word_ids':[...], 'input_mask':[...], 'input_type_ids':[...], 'label':[...]}
+            )
+    """
+    np.random.seed(seed)
+    num_samples = len(samples[list(samples.keys())[0]])
+    train_samples_len = int(np.round(num_samples * (1 - train_val_split_rate)))
+
+    samples_idx = np.random.permutation(np.arange(num_samples))
+    train_samples_idx = samples_idx[:train_samples_len]
+    val_samples_idx = samples_idx[train_samples_len:]
+
+    train_samples = {}
+    val_samples = {}
+
+    for key in samples.keys():
+        train_samples[key] = np.array([samples[key][int(idx)] for idx in train_samples_idx])
+        val_samples[key] = np.array([samples[key][int(idx)] for idx in val_samples_idx])
+
+    return train_samples, val_samples
 
 
 class GPT2Customize(TFGPT2LMHeadModel):
@@ -65,24 +102,33 @@ class GPT2Customize(TFGPT2LMHeadModel):
 
 class GPT2ConditionalGeneration:
     def __init__(self,
-                 pre_m_name_or_path="gpt2-large",
+                 # pre_m_name_or_path="gpt2-large",
+                 pre_m_name_or_path="gpt2",
                  epochs=10,
                  batch_size=32,
                  input_max_length=512,
-                 output_max_length=512,
+                 output_max_length=128,
                  lr_max_value=0.005,
                  beta_1=0.9,
                  beta_2=0.999,
                  epsilon=1e-8,
-                 datasets_name='rl_tables_2023-02-15_14-23-16.pkl'):
+                 datasets_name='records_2023-02-17_17-40-47.pkl'):
+        self.input_max_length = input_max_length
+        self.output_max_length = output_max_length
+        self.datasets_name = datasets_name
+
         pre_w_path = os.path.join(PWD, "pretrained_w", pre_m_name_or_path)
+
         with tf.device("/CPU:0"):
-            self.tokenizer = GPT2Tokenizer.from_pretrained(
+            self.gpt2_tokenizer = GPT2Tokenizer.from_pretrained(
                 pre_m_name_or_path,
                 model_max_length=input_max_length,
                 cache_dir=os.path.join(pre_w_path, "tokenizer"))
 
-        self.GPT2Model = GPT2Customize.from_pretrained(
+        if self.gpt2_tokenizer.pad_token is None:
+            self.gpt2_tokenizer.add_special_tokens({'pad_token': '[PAD]'})
+
+        self.gpt2_model = GPT2Customize.from_pretrained(
             pre_m_name_or_path,
             cache_dir=os.path.join(pre_w_path, "model"))
 
@@ -100,12 +146,154 @@ class GPT2ConditionalGeneration:
 
         self.tensorboard_callback = tf.keras.callbacks.TensorBoard(log_dir=log_absolute_dir, histogram_freq=1)
 
-    def dataset_processing(self):
-        pass
+    def dataset_add_letter_body(self, datasetes):
+        for index in range(len(datasetes)):
+            datasetes[index]['letter_body'] = list(
+                filter(lambda x: len(x.strip().split()) > 20, datasetes[index]['recommendation_letter']))
 
-    def __call__(self, *args, **kwargs):
-        pass
+    def input_label_generate(self, introduction_start, reasons_end):
+        inputs = []
+        labels = []
+
+        for item in introduction_start:
+            input_sent = f"My name is {item['teacher_name']}. I am {item['job_title']} of {item['office']}. {item['student_name']} and I have a {item['relationship']} relationship. Below are the details of our relationship: {item['introduction']}"
+            label_sent = item['letter_body'][0]
+
+            inputs.append(input_sent)
+            labels.append(label_sent)
+
+        for item in reasons_end:
+            input_sent = f"Applicant's name is {item['student_name']}. The reason for the recommendation is {item['reasons']}"
+            label_sent = item['letter_body'][-1]
+
+            inputs.append(input_sent)
+            labels.append(label_sent)
+
+        return inputs, labels
+
+    def to_token(self, inputs, labels):
+        with tf.device("/CPU:0"):
+            input_mask_ids = self.gpt2_tokenizer(
+                inputs,
+                padding=True,
+                truncation=True,
+                max_length=self.input_max_length,
+                return_tensors="tf")
+
+            label_ids = self.gpt2_tokenizer(
+                labels,
+                padding=True,
+                truncation=True,
+                return_attention_mask=False,
+                max_length=self.output_max_length,
+                return_tensors="tf").input_ids
+
+        input_numpy_ids = input_mask_ids.input_ids.numpy()
+        label_numpy_ids = label_ids.numpy()
+
+        if not os.path.exists("analyze"):
+            os.makedirs("analyze")
+
+        vocab_size = self.gpt2_tokenizer.vocab_size
+        input_ids_analyze = [list(filter(lambda col: col != vocab_size, row)) for row in input_numpy_ids]
+        label_ids_analyze = [list(filter(lambda col: col != vocab_size, row)) for row in label_numpy_ids]
+
+        input_ids_analyze_len = list(map(lambda x: len(x), input_ids_analyze))
+        label_ids_analyze_len = list(map(lambda x: len(x), label_ids_analyze))
+        input_ids_analyze_len.sort(reverse=True)
+        label_ids_analyze_len.sort(reverse=True)
+
+        plt.figure(figsize=(24, 10), dpi=200)
+        ax = plt.subplot2grid((1, 1), (0, 0), colspan=1, rowspan=1)
+
+        ax.plot(list(range(len(input_ids_analyze_len))), input_ids_analyze_len, label="input_ids_len")
+        ax.plot(list(range(len(label_ids_analyze_len))), label_ids_analyze_len, label="label_ids_len")
+
+        plt.legend(loc=2, bbox_to_anchor=(1.0, 1.0))
+        plt.savefig(os.path.join("analyze", "token_len.png"))
+
+        return input_mask_ids, label_ids
+
+    def dataset_processing(self, datasetes):
+        self.dataset_add_letter_body(datasetes)
+
+        introduction = list(
+            filter(lambda x: re.search(r"When do students enter the University", x['introduction'], re.I) is None,
+                   datasetes))
+        introduction = list(filter(lambda x: len(x['introduction'].strip().split()) >= 10, introduction))
+        introduction_start = list(filter(lambda x: len(x['letter_body']) >= 4, introduction))
+        introduction_start = list(filter(lambda x: len(x['letter_body'][0].strip().split()) >= 30, introduction_start))
+
+        reasons = list(filter(lambda x: len(x['reasons'].strip().split()) >= 10, datasetes))
+        reasons_end = list(filter(lambda x: len(x['letter_body']) >= 4, reasons))
+        reasons_end = list(filter(lambda x: len(x['letter_body'][-1].strip().split()) >= 30, reasons_end))
+
+        inputs, labels = self.input_label_generate(introduction_start, reasons_end)
+
+        input_mask_ids, label_ids = self.to_token(inputs, labels)
+
+        return input_mask_ids.input_ids, input_mask_ids.attention_mask, label_ids
+
+    def __call__(self):
+        datasetes = np.load(os.path.join(PWD, 'dataset', self.datasets_name), allow_pickle=True)
+        input_ids, attention_mask, label_ids = self.dataset_processing(datasetes)
+
+        train_sample, val_sample = train_val_split({
+            "input_ids": input_ids,
+            "attention_mask": attention_mask,
+            "label_ids": label_ids
+        })
+
+        tmp_path = './tmp'
+        checkpoint_filepath = tmp_path + '/cp-{epoch:04d}.ckpt'
+        os.system(f'rm -rfv {tmp_path}')
+
+        if not os.path.exists(tmp_path):
+            os.makedirs(tmp_path)
+
+        save_pkl(
+            os.path.join(tmp_path, 'config.pkl'),
+            {
+                'pre_m_name_or_path': self.pre_m_name_or_path,
+                'batch_size': self.batch_size,
+                'input_max_length': self.input_max_length,
+                'output_max_length': self.output_max_length,
+                'lr_max_value': self.lr_max_value,
+                'datasets_name': self.datasets_name
+            })
+
+        model_checkpoint_callback = tf.keras.callbacks.ModelCheckpoint(
+            filepath=checkpoint_filepath,
+            save_weights_only=True,
+            save_best_only=False,
+            verbose=1,
+            save_freq='epoch')
+
+        self.gpt2_model.compile(
+            optimizer=self.optimizer,
+            loss=self.loss_object,
+            metrics=[self.sparse_categorical_accuracy])
+
+        self.gpt2_model.fit(
+            x={
+                "input_ids": train_sample['input_ids'],
+                "attention_mask": train_sample['attention_mask']
+            },
+            y=train_sample['label_ids'],
+            batch_size=self.batch_size,
+            epochs=self.epochs,
+            shuffle=True,
+            validation_data=(
+                {
+                    "input_ids": val_sample['input_ids'],
+                    "attention_mask": val_sample['attention_mask']
+                },
+                val_sample['label_ids']
+            ),
+            callbacks=[self.tensorboard_callback, model_checkpoint_callback]
+        )
 
 
 if __name__ == "__main__":
-    pass
+    gpt2_conditional_generation = GPT2ConditionalGeneration()
+    gpt2_conditional_generation()

@@ -1,0 +1,2 @@
+rsync -avz --exclude="venv" --exclude=".git" --exclude="logs" --exclude=".idea" --exclude="__pycache__" --exclude="checkpoints" --exclude="pretrained_w"  * fst@172.16.10.7:/home/fst/workshop/rl_data_to_text/
+#rsync -avz --exclude="venv" --exclude=".git" --exclude="logs" --exclude=".idea" --exclude="__pycache__" --exclude="checkpoints" --exclude="pretrained_w" --exclude="generate_text_analyse"  * trainer@172.16.10.8:/home/trainer/workshop/context_data_to_text/

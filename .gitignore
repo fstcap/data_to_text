@@ -1,5 +1,6 @@
 venv/
 .idea/
 datasets/
+pretrained_w/
 *.pkl
 *.png
