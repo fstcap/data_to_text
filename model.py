@@ -71,18 +71,20 @@ class GPT2Customize(TFGPT2LMHeadModel):
         x, y, sample_weight = data_adapter.unpack_x_y_sample_weight(data)
 
         # Run forward pass.
-        with tf.GradientTape as tape:
+        with tf.GradientTape() as tape:
             output = self(
                 input_ids=x['input_ids'],
                 attention_mask=x['attention_mask'],
-                label=y,
+                labels=y,
                 training=True)
             loss = output.loss
             logits = output.logits
             self.compute_loss(x['input_ids'], y, logits, sample_weight)
+        # self._validate_target_and_loss(y, loss)
 
         # Run backwards pass.
         self.optimizer.minimize(loss, self.trainable_variables, tape=tape)
+
         return self.compute_metrics(x['input_ids'], y, logits, sample_weight)
 
     def test_step(self, data):
@@ -91,12 +93,13 @@ class GPT2Customize(TFGPT2LMHeadModel):
         output = self(
             input_ids=x['input_ids'],
             attention_mask=x['attention_mask'],
-            label=y,
+            labels=y,
             training=False)
         logits = output.logits
 
         # Updates stateful loss metrics.
         self.compute_loss(x['input_ids'], y, logits, sample_weight)
+
         return self.compute_metrics(x['input_ids'], y, logits, sample_weight)
 
 
@@ -113,8 +116,12 @@ class GPT2ConditionalGeneration:
                  beta_2=0.999,
                  epsilon=1e-8,
                  datasets_name='records_2023-02-17_17-40-47.pkl'):
+        self.pre_m_name_or_path = pre_m_name_or_path
+        self.epochs = epochs
+        self.batch_size = batch_size
         self.input_max_length = input_max_length
         self.output_max_length = output_max_length
+        self.lr_max_value = lr_max_value
         self.datasets_name = datasets_name
 
         pre_w_path = os.path.join(PWD, "pretrained_w", pre_m_name_or_path)
@@ -126,7 +133,7 @@ class GPT2ConditionalGeneration:
                 cache_dir=os.path.join(pre_w_path, "tokenizer"))
 
         if self.gpt2_tokenizer.pad_token is None:
-            self.gpt2_tokenizer.add_special_tokens({'pad_token': '[PAD]'})
+            self.gpt2_tokenizer.pad_token = self.gpt2_tokenizer.eos_token
 
         self.gpt2_model = GPT2Customize.from_pretrained(
             pre_m_name_or_path,
@@ -188,15 +195,22 @@ class GPT2ConditionalGeneration:
                 max_length=self.output_max_length,
                 return_tensors="tf").input_ids
 
+        sample_size = label_ids.shape[0]
+        input_token_size = input_mask_ids.input_ids.shape[1]
+        label_token_size = label_ids.shape[1]
+        eos_token_id = self.gpt2_tokenizer.eos_token_id
+
+        padding_matrix = tf.fill((sample_size, input_token_size - label_token_size), eos_token_id)
+        label_ids = tf.concat([label_ids, padding_matrix], axis=-1)
+
         input_numpy_ids = input_mask_ids.input_ids.numpy()
         label_numpy_ids = label_ids.numpy()
 
         if not os.path.exists("analyze"):
             os.makedirs("analyze")
 
-        vocab_size = self.gpt2_tokenizer.vocab_size
-        input_ids_analyze = [list(filter(lambda col: col != vocab_size, row)) for row in input_numpy_ids]
-        label_ids_analyze = [list(filter(lambda col: col != vocab_size, row)) for row in label_numpy_ids]
+        input_ids_analyze = [list(filter(lambda col: col != eos_token_id, row)) for row in input_numpy_ids]
+        label_ids_analyze = [list(filter(lambda col: col != eos_token_id, row)) for row in label_numpy_ids]
 
         input_ids_analyze_len = list(map(lambda x: len(x), input_ids_analyze))
         label_ids_analyze_len = list(map(lambda x: len(x), label_ids_analyze))

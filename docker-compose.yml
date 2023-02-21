@@ -1,0 +1,30 @@
+version: "3.8"
+services:
+  rl_data_to_text:
+    build: .
+    image: rl_data_to_text:1.0.1
+    volumes:
+      - "./:/app:rw"
+    command:
+      - /bin/sh
+      - -c
+      - "cd /app
+        && chmod 777 setup.sh
+        && ./setup.sh"
+    ports:
+      - "99:99"
+    environment:
+      - PYTHONUNBUFFERED=1
+#      - MLIR_CRASH_REPRODUCER_DIRECTORY=enable
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: 1
+              capabilities: [ gpu ]
+    container_name: "rl_data_to_text"
+    networks:
+      - app_net
+networks:
+  app_net:

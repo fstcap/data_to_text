@@ -6,7 +6,7 @@ parser.add_argument("--prename", type=str, default="gpt2-large")  # gpt2, gpt2-l
 parser.add_argument("--epochs", type=int, default=10)  # 正整数.
 parser.add_argument("--batch_size", type=int, default=32)  # 正整数.
 parser.add_argument("--input_max_length", type=int, default=512)  # 正整数.
-parser.add_argument("--output_max_length", type=int, default=128)  # 正整数.
+parser.add_argument("--output_max_length", type=int, default=512)  # 正整数.
 parser.add_argument("--lr_max_value", type=float, default=0.001)  # 正数.
 parser.add_argument("--datasets", type=str, default='records_2023-02-17_17-40-47.pkl')  #
 
