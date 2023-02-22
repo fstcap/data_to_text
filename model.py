@@ -13,22 +13,6 @@ from utils.save_data_tool import save_pkl
 
 PWD = os.getcwd()
 
-gpus = tf.config.list_physical_devices('GPU')
-if gpus:
-    # Restrict TensorFlow to only allocate 1GB of memory on the first GPU
-    try:
-        tf.config.experimental.set_memory_growth(gpus[0], True)
-        tf.config.set_soft_device_placement(True)
-        tf.config.set_logical_device_configuration(
-            gpus[0],
-            [tf.config.experimental.VirtualDeviceConfiguration(memory_limit=22528)])
-
-        logical_gpus = tf.config.list_logical_devices('GPU')
-        print(len(gpus), "Physical GPUs,", len(logical_gpus), "Logical GPUs")
-    except RuntimeError as e:
-        # Virtual devices must be set before GPUs have been initialized
-        print(e)
-
 
 def train_val_split(samples, train_val_split_rate=0.1, seed=5):
     """
@@ -105,17 +89,35 @@ class GPT2Customize(TFGPT2LMHeadModel):
 
 class GPT2ConditionalGeneration:
     def __init__(self,
+                 memory_limit=22,
                  # pre_m_name_or_path="gpt2-large",
                  pre_m_name_or_path="gpt2",
                  epochs=10,
                  batch_size=32,
                  input_max_length=512,
-                 output_max_length=128,
+                 output_max_length=256,
                  lr_max_value=0.005,
                  beta_1=0.9,
                  beta_2=0.999,
                  epsilon=1e-8,
                  datasets_name='records_2023-02-17_17-40-47.pkl'):
+
+        gpus = tf.config.list_physical_devices('GPU')
+        if gpus:
+            # Restrict TensorFlow to only allocate 1GB of memory on the first GPU
+            try:
+                tf.config.experimental.set_memory_growth(gpus[0], True)
+                tf.config.set_soft_device_placement(True)
+                tf.config.set_logical_device_configuration(
+                    gpus[0],
+                    [tf.config.experimental.VirtualDeviceConfiguration(memory_limit=memory_limit * 1024)])
+
+                logical_gpus = tf.config.list_logical_devices('GPU')
+                print(len(gpus), "Physical GPUs,", len(logical_gpus), "Logical GPUs")
+            except RuntimeError as e:
+                # Virtual devices must be set before GPUs have been initialized
+                print(e)
+
         self.pre_m_name_or_path = pre_m_name_or_path
         self.epochs = epochs
         self.batch_size = batch_size
@@ -158,7 +160,7 @@ class GPT2ConditionalGeneration:
             datasetes[index]['letter_body'] = list(
                 filter(lambda x: len(x.strip().split()) > 20, datasetes[index]['recommendation_letter']))
 
-    def input_label_generate(self, introduction_start, reasons_end):
+    def input_label_generate(self, introduction_start, reasons_end, reasons_1, detailed_2):
         inputs = []
         labels = []
 
@@ -172,6 +174,20 @@ class GPT2ConditionalGeneration:
         for item in reasons_end:
             input_sent = f"Applicant's name is {item['student_name']}. The reason for the recommendation is {item['reasons']}"
             label_sent = item['letter_body'][-1]
+
+            inputs.append(input_sent)
+            labels.append(label_sent)
+
+        for item in reasons_1:
+            input_sent = f"Applicant's name is {item['student_name']}. {item['student_name']}`s degree is {item['student_statuses'][0]['degree']}. {item['student_name']}`s major is {item['student_statuses'][0]['major']}. The reason for the recommendation is {item['reasons']}"
+            label_sent = item['letter_body'][1]
+
+            inputs.append(input_sent)
+            labels.append(label_sent)
+
+        for item in detailed_2:
+            input_sent = f"Applicant's name is {item['student_name']}. {item['student_name']}`s project skills is {item['detailed']}"
+            label_sent = item['letter_body'][2]
 
             inputs.append(input_sent)
             labels.append(label_sent)
@@ -242,7 +258,13 @@ class GPT2ConditionalGeneration:
         reasons_end = list(filter(lambda x: len(x['letter_body']) >= 4, reasons))
         reasons_end = list(filter(lambda x: len(x['letter_body'][-1].strip().split()) >= 30, reasons_end))
 
-        inputs, labels = self.input_label_generate(introduction_start, reasons_end)
+        reasons_1 = list(filter(lambda x: len(x['letter_body'][1].strip().split()) >= 30, reasons_end))
+
+        detailed = list(filter(lambda x: len(x['detailed'].strip().split()) >= 10, datasetes))
+        detailed_2 = list(filter(lambda x: len(x['letter_body']) >= 4, detailed))
+        detailed_2 = list(filter(lambda x: len(x['letter_body'][2].strip().split()) >= 30, detailed_2))
+
+        inputs, labels = self.input_label_generate(introduction_start, reasons_end, reasons_1, detailed_2)
 
         input_mask_ids, label_ids = self.to_token(inputs, labels)
 

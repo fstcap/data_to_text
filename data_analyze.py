@@ -141,7 +141,7 @@ class DataAnalyze(object):
                     break
             ax.plot(list(range(len(value))), value, label=key)
         plt.legend(loc=2, bbox_to_anchor=(1.0, 1.162))
-        plt.savefig("plot_sent_len.png")
+        plt.savefig(os.path.join(root_path, "plot_sent_len.png"))
 
         for key, value in data.items():
             plt.figure(figsize=(24, 10), dpi=200)
