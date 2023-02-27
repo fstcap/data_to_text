@@ -4,26 +4,27 @@ import argparse
 
 import numpy as np
 import tensorflow as tf
-from transformers import TFGPT2LMHeadModel
+# from transformers import TFGPT2LMHeadModel
+from transformers import TFT5ForConditionalGeneration
 
 
 class ModelSaveToPretraind:
     def __init__(self, memory_limit=22, tmp_path='tmp', save_epoch_num='1,2,3,4'):
-        gpus = tf.config.list_physical_devices('GPU')
-        if gpus:
-            # Restrict TensorFlow to only allocate 1GB of memory on the first GPU
-            try:
-                tf.config.experimental.set_memory_growth(gpus[0], True)
-                tf.config.set_soft_device_placement(True)
-                tf.config.set_logical_device_configuration(
-                    gpus[0],
-                    [tf.config.experimental.VirtualDeviceConfiguration(memory_limit=memory_limit * 1024)])
-
-                logical_gpus = tf.config.list_logical_devices('GPU')
-                print(len(gpus), "Physical GPUs,", len(logical_gpus), "Logical GPUs")
-            except RuntimeError as e:
-                # Virtual devices must be set before GPUs have been initialized
-                print(e)
+        # gpus = tf.config.list_physical_devices('GPU')
+        # if gpus:
+        #     # Restrict TensorFlow to only allocate 1GB of memory on the first GPU
+        #     try:
+        #         tf.config.experimental.set_memory_growth(gpus[0], True)
+        #         tf.config.set_soft_device_placement(True)
+        #         tf.config.set_logical_device_configuration(
+        #             gpus[0],
+        #             [tf.config.experimental.VirtualDeviceConfiguration(memory_limit=memory_limit * 1024)])
+        #
+        #         logical_gpus = tf.config.list_logical_devices('GPU')
+        #         print(len(gpus), "Physical GPUs,", len(logical_gpus), "Logical GPUs")
+        #     except RuntimeError as e:
+        #         # Virtual devices must be set before GPUs have been initialized
+        #         print(e)
 
         self.checkpoint_filepath = tmp_path + '/cp-{epoch:04d}.ckpt'
         self.save_epoch_num = [int(num.strip()) for num in save_epoch_num.split(',')]
@@ -46,9 +47,11 @@ class ModelSaveToPretraind:
         self.PWD = os.getcwd()
         pretrained_w_path = os.path.join(self.PWD, "pretrained_w")
 
-        self.gpt2_model = TFGPT2LMHeadModel.from_pretrained(
-            self.pre_m_name_or_path,
-            cache_dir=os.path.join(pretrained_w_path, "model"))
+        with tf.device("/CPU:0"):
+            # self.gpt2_model = TFGPT2LMHeadModel.from_pretrained(
+            self.gpt2_model = TFT5ForConditionalGeneration.from_pretrained(
+                self.pre_m_name_or_path,
+                cache_dir=os.path.join(pretrained_w_path, "model"))
 
     def __call__(self, *args, **kwargs):
         print("\033[0;31msave start\033[0m")

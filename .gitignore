@@ -2,5 +2,6 @@ venv/
 .idea/
 datasets/
 pretrained_w/
+*.pyc
 *.pkl
 *.png

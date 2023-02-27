@@ -7,7 +7,8 @@ import numpy as np
 import tensorflow as tf
 
 from keras.engine import data_adapter
-from transformers import GPT2Tokenizer, TFGPT2LMHeadModel
+# from transformers import GPT2Tokenizer, TFGPT2LMHeadModel
+from transformers import T5Tokenizer, TFT5ForConditionalGeneration
 
 from utils.save_data_tool import save_pkl
 
@@ -47,7 +48,8 @@ def train_val_split(samples, train_val_split_rate=0.1, seed=5):
     return train_samples, val_samples
 
 
-class GPT2Customize(TFGPT2LMHeadModel):
+# class GPT2Customize(TFGPT2LMHeadModel):
+class GPT2Customize(TFT5ForConditionalGeneration):
     def __init__(self, config, *inputs, **kwargs):
         super().__init__(config, *inputs, **kwargs)
 
@@ -59,6 +61,7 @@ class GPT2Customize(TFGPT2LMHeadModel):
             output = self(
                 input_ids=x['input_ids'],
                 attention_mask=x['attention_mask'],
+                decoder_input_ids=x['decoder_input_ids'],
                 labels=y,
                 training=True)
             loss = output.loss
@@ -77,6 +80,7 @@ class GPT2Customize(TFGPT2LMHeadModel):
         output = self(
             input_ids=x['input_ids'],
             attention_mask=x['attention_mask'],
+            decoder_input_ids=x['decoder_input_ids'],
             labels=y,
             training=False)
         logits = output.logits
@@ -90,8 +94,10 @@ class GPT2Customize(TFGPT2LMHeadModel):
 class GPT2ConditionalGeneration:
     def __init__(self,
                  memory_limit=22,
+                 load_weight_latest=False,
                  # pre_m_name_or_path="gpt2-large",
-                 pre_m_name_or_path="gpt2",
+                 # pre_m_name_or_path="gpt2",
+                 pre_m_name_or_path="t5-small",
                  epochs=10,
                  batch_size=32,
                  input_max_length=512,
@@ -118,6 +124,7 @@ class GPT2ConditionalGeneration:
                 # Virtual devices must be set before GPUs have been initialized
                 print(e)
 
+        self.load_weight_latest = load_weight_latest
         self.pre_m_name_or_path = pre_m_name_or_path
         self.epochs = epochs
         self.batch_size = batch_size
@@ -129,7 +136,8 @@ class GPT2ConditionalGeneration:
         pre_w_path = os.path.join(PWD, "pretrained_w", pre_m_name_or_path)
 
         with tf.device("/CPU:0"):
-            self.gpt2_tokenizer = GPT2Tokenizer.from_pretrained(
+            # self.gpt2_tokenizer = GPT2Tokenizer.from_pretrained(
+            self.gpt2_tokenizer = T5Tokenizer.from_pretrained(
                 pre_m_name_or_path,
                 model_max_length=input_max_length,
                 cache_dir=os.path.join(pre_w_path, "tokenizer"))
@@ -211,22 +219,30 @@ class GPT2ConditionalGeneration:
                 max_length=self.output_max_length,
                 return_tensors="tf").input_ids
 
-        sample_size = label_ids.shape[0]
-        input_token_size = input_mask_ids.input_ids.shape[1]
-        label_token_size = label_ids.shape[1]
-        eos_token_id = self.gpt2_tokenizer.eos_token_id
-
-        padding_matrix = tf.fill((sample_size, input_token_size - label_token_size), eos_token_id)
-        label_ids = tf.concat([label_ids, padding_matrix], axis=-1)
-
         input_numpy_ids = input_mask_ids.input_ids.numpy()
         label_numpy_ids = label_ids.numpy()
 
+        pad_token_id = self.gpt2_tokenizer.pad_token_id
+
+        input_ids_analyze = [list(filter(lambda col: col != pad_token_id, row)) for row in input_numpy_ids]
+        label_ids_analyze = [list(filter(lambda col: col != pad_token_id, row)) for row in label_numpy_ids]
+
+        def generator_decoder_input_id(item):
+            return [self.gpt2_model.config.decoder_start_token_id] + item[: len(item) - 1]
+
+        decoder_input_ids = list(map(generator_decoder_input_id, label_ids_analyze))
+        decoder_input_ids_tensor = tf.ragged.constant(decoder_input_ids, dtype=label_ids.dtype).to_tensor()
+
+        # sample_size = label_ids.shape[0]
+        # input_token_size = input_mask_ids.input_ids.shape[1]
+        # label_token_size = label_ids.shape[1]
+        # eos_token_id = self.gpt2_tokenizer.eos_token_id
+        #
+        # padding_matrix = tf.fill((sample_size, input_token_size - label_token_size), eos_token_id)
+        # label_ids = tf.concat([label_ids, padding_matrix], axis=-1)
+
         if not os.path.exists("analyze"):
             os.makedirs("analyze")
-
-        input_ids_analyze = [list(filter(lambda col: col != eos_token_id, row)) for row in input_numpy_ids]
-        label_ids_analyze = [list(filter(lambda col: col != eos_token_id, row)) for row in label_numpy_ids]
 
         input_ids_analyze_len = list(map(lambda x: len(x), input_ids_analyze))
         label_ids_analyze_len = list(map(lambda x: len(x), label_ids_analyze))
@@ -242,7 +258,7 @@ class GPT2ConditionalGeneration:
         plt.legend(loc=2, bbox_to_anchor=(1.0, 1.0))
         plt.savefig(os.path.join("analyze", "token_len.png"))
 
-        return input_mask_ids, label_ids
+        return input_mask_ids, label_ids, decoder_input_ids_tensor
 
     def dataset_processing(self, datasetes):
         self.dataset_add_letter_body(datasetes)
@@ -266,23 +282,29 @@ class GPT2ConditionalGeneration:
 
         inputs, labels = self.input_label_generate(introduction_start, reasons_end, reasons_1, detailed_2)
 
-        input_mask_ids, label_ids = self.to_token(inputs, labels)
+        input_mask_ids, label_ids, decoder_input_ids = self.to_token(inputs, labels)
 
-        return input_mask_ids.input_ids, input_mask_ids.attention_mask, label_ids
+        return input_mask_ids.input_ids, input_mask_ids.attention_mask, label_ids, decoder_input_ids
 
     def __call__(self):
         datasetes = np.load(os.path.join(PWD, 'dataset', self.datasets_name), allow_pickle=True)
-        input_ids, attention_mask, label_ids = self.dataset_processing(datasetes)
+        input_ids, attention_mask, label_ids, decoder_input_ids = self.dataset_processing(datasetes)
 
         train_sample, val_sample = train_val_split({
             "input_ids": input_ids,
             "attention_mask": attention_mask,
-            "label_ids": label_ids
+            "label_ids": label_ids,
+            "decoder_input_ids": decoder_input_ids
         })
 
         tmp_path = './tmp'
         checkpoint_filepath = tmp_path + '/cp-{epoch:04d}.ckpt'
-        os.system(f'rm -rfv {tmp_path}')
+        if self.load_weight_latest:
+            latest = tf.train.latest_checkpoint(tmp_path)
+            print(f"\033[0;34mlatest:\033[0;35m{latest}\033[0m")
+            self.gpt2_model.load_weights(latest)
+        else:
+            os.system(f'rm -rfv {tmp_path}')
 
         if not os.path.exists(tmp_path):
             os.makedirs(tmp_path)
@@ -313,7 +335,8 @@ class GPT2ConditionalGeneration:
         self.gpt2_model.fit(
             x={
                 "input_ids": train_sample['input_ids'],
-                "attention_mask": train_sample['attention_mask']
+                "attention_mask": train_sample['attention_mask'],
+                "decoder_input_ids": train_sample['decoder_input_ids']
             },
             y=train_sample['label_ids'],
             batch_size=self.batch_size,
@@ -322,7 +345,8 @@ class GPT2ConditionalGeneration:
             validation_data=(
                 {
                     "input_ids": val_sample['input_ids'],
-                    "attention_mask": val_sample['attention_mask']
+                    "attention_mask": val_sample['attention_mask'],
+                    "decoder_input_ids": val_sample['decoder_input_ids']
                 },
                 val_sample['label_ids']
             ),
