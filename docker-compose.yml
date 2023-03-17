@@ -3,6 +3,7 @@ services:
   rl_data_to_text:
     build: .
     image: rl_data_to_text:1.0.1
+#    restart: always
     volumes:
       - "./:/app:rw"
     command:

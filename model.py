@@ -301,6 +301,7 @@ class GPT2ConditionalGeneration:
         checkpoint_filepath = tmp_path + '/cp-{epoch:04d}.ckpt'
         if self.load_weight_latest:
             latest = tf.train.latest_checkpoint(tmp_path)
+            # latest = "./tmp/cp-0028.ckpt"
             print(f"\033[0;34mlatest:\033[0;35m{latest}\033[0m")
             self.gpt2_model.load_weights(latest)
         else:
